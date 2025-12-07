@@ -98,22 +98,88 @@ def ask(question):
 
 
 @cli.command()
-def backfill():
-    """Index full history of the repo into Code Memory."""
+@click.option("--limit", default=None, help="Only backfill latest N commits")
+def backfill(limit):
+    """Index entire git history into Code Memory."""
     ensure_git_repo()
     cfg = load_config()
     if not cfg:
-        click.echo("Not initialized.")
+        click.echo("Not initialized. Run `codemem init`.")
         return
 
+    repo = cfg["repo_name"]
+    api = cfg["api_url"]
+
+    # Get all commit hashes newest first
+    cmd = "git rev-list --all"
+    if limit:
+        cmd += f" | head -n {limit}"
+
     commit_hashes = subprocess.check_output(
-        "git rev-list --all", shell=True).decode().splitlines()
+        cmd, shell=True).decode().splitlines()
 
-    click.echo(f"Backfilling {len(commit_hashes)} commits...")
+    total = len(commit_hashes)
+    click.echo(f"📚 Found {total} commits in {repo}")
 
-    for h in commit_hashes:
-        subprocess.run(f"git checkout {h}", shell=True, stdout=subprocess.PIPE)
-        post_commit(cfg["api_url"])
+    errors = 0
 
-    subprocess.run("git checkout -", shell=True)
-    click.echo("Backfill complete!")
+    for i, h in enumerate(commit_hashes, start=1):
+        click.echo(f"[{i}/{total}] {h[:7]} ...", nl=False)
+
+        try:
+            # commit message
+            msg = subprocess.check_output(
+                f"git log -1 --pretty=%B {h}", shell=True).decode().strip()
+
+            # changed files for that commit
+            files_raw = subprocess.check_output(
+                f"git diff-tree --no-commit-id --name-only -r {h}",
+                shell=True
+            ).decode()
+            changed_files = files_raw.splitlines()
+
+            # diff: commit vs its parent
+            # NOTE: This does NOT checkout anything
+            try:
+                diff = subprocess.check_output(
+                    f"git diff {h}^ {h}",
+                    shell=True,
+                    stderr=subprocess.DEVNULL
+                ).decode()
+            except subprocess.CalledProcessError:
+                # fallback for first commit (no parent)
+                diff = subprocess.check_output(
+                    f"git show {h}",
+                    shell=True
+                ).decode()
+
+            payload = {
+                "repo": repo,
+                "commit_hash": h,
+                "author": subprocess.check_output(
+                    f"git log -1 --pretty=format:'%an <%ae>' {h}",
+                    shell=True
+                ).decode().strip(),
+                "branch": "backfill",
+                "commit_message": msg,
+                "changed_files": changed_files,
+                "diff": diff,
+            }
+
+            requests.post(
+                f"{api}/ingest",
+                json=payload,
+                timeout=5
+            )
+
+            click.echo(" ok")
+        except Exception as e:
+            errors += 1
+            click.echo(f" ⚠️ error: {e}")
+
+    click.echo("\nDone!")
+    if errors:
+        click.echo(f"{errors} commits had errors.")
+    else:
+        click.echo("🎉 No errors detected")
+
