@@ -6,7 +6,7 @@ import requests
 import json
 import os
 from pathlib import Path
-
+from tqdm import tqdm
 
 def ensure_git_repo():
     try:
@@ -100,7 +100,7 @@ def ask(question):
 @cli.command()
 @click.option("--limit", default=None, help="Only backfill latest N commits")
 def backfill(limit):
-    """Index entire git history into Code Memory."""
+    """Index entire git history into Code Memory with progress bar."""
     ensure_git_repo()
     cfg = load_config()
     if not cfg:
@@ -110,7 +110,7 @@ def backfill(limit):
     repo = cfg["repo_name"]
     api = cfg["api_url"]
 
-    # Get all commit hashes newest first
+    # Grab commits
     cmd = "git rev-list --all"
     if limit:
         cmd += f" | head -n {limit}"
@@ -119,27 +119,23 @@ def backfill(limit):
         cmd, shell=True).decode().splitlines()
 
     total = len(commit_hashes)
-    click.echo(f"📚 Found {total} commits in {repo}")
+    click.echo(f"📚 Found {total} commits in {repo}\n")
 
     errors = 0
 
-    for i, h in enumerate(commit_hashes, start=1):
-        click.echo(f"[{i}/{total}] {h[:7]} ...", nl=False)
-
+    for h in tqdm(commit_hashes, desc="Backfilling", unit="commit"):
         try:
-            # commit message
             msg = subprocess.check_output(
-                f"git log -1 --pretty=%B {h}", shell=True).decode().strip()
+                f"git log -1 --pretty=%B {h}", shell=True
+            ).decode().strip()
 
-            # changed files for that commit
             files_raw = subprocess.check_output(
                 f"git diff-tree --no-commit-id --name-only -r {h}",
                 shell=True
             ).decode()
             changed_files = files_raw.splitlines()
 
-            # diff: commit vs its parent
-            # NOTE: This does NOT checkout anything
+            # diff vs parent commit
             try:
                 diff = subprocess.check_output(
                     f"git diff {h}^ {h}",
@@ -147,7 +143,7 @@ def backfill(limit):
                     stderr=subprocess.DEVNULL
                 ).decode()
             except subprocess.CalledProcessError:
-                # fallback for first commit (no parent)
+                # first commit
                 diff = subprocess.check_output(
                     f"git show {h}",
                     shell=True
@@ -166,20 +162,17 @@ def backfill(limit):
                 "diff": diff,
             }
 
+            # POST with short timeout
             requests.post(
                 f"{api}/ingest",
                 json=payload,
-                timeout=5
+                timeout=4
             )
 
-            click.echo(" ok")
-        except Exception as e:
+        except Exception:
             errors += 1
-            click.echo(f" ⚠️ error: {e}")
+            tqdm.write(f"⚠️ Error processing commit {h[:7]}")
 
-    click.echo("\nDone!")
+    click.echo("\n🎉 Backfill complete!")
     if errors:
         click.echo(f"{errors} commits had errors.")
-    else:
-        click.echo("🎉 No errors detected")
-
