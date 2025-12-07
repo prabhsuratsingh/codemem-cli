@@ -1,2 +1,6 @@
 codemem.egg-info/
 .venv
+codemem/__pycache__/
+*.pyc
+*.pyo
+*.pyd
