@@ -99,8 +99,9 @@ def ask(question):
 
 @cli.command()
 @click.option("--limit", default=None, help="Only backfill latest N commits")
-def backfill(limit):
-    """Index entire git history into Code Memory with progress bar."""
+@click.option("--concurrency", default=8, help="Number of parallel workers")
+def backfill(limit, concurrency):
+    """Index entire git history into Code Memory (parallel + ETA)."""
     ensure_git_repo()
     cfg = load_config()
     if not cfg:
@@ -110,20 +111,26 @@ def backfill(limit):
     repo = cfg["repo_name"]
     api = cfg["api_url"]
 
-    # Grab commits
+    import subprocess
+    import requests
+    from tqdm import tqdm
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time
+
+    # --- Fetch commit list ---
     cmd = "git rev-list --all"
     if limit:
         cmd += f" | head -n {limit}"
 
     commit_hashes = subprocess.check_output(
-        cmd, shell=True).decode().splitlines()
+        cmd, shell=True
+    ).decode().splitlines()
 
     total = len(commit_hashes)
     click.echo(f"📚 Found {total} commits in {repo}\n")
 
-    errors = 0
-
-    for h in tqdm(commit_hashes, desc="Backfilling", unit="commit"):
+    # --- Helper: process one commit ---
+    def process_commit(h):
         try:
             msg = subprocess.check_output(
                 f"git log -1 --pretty=%B {h}", shell=True
@@ -135,7 +142,7 @@ def backfill(limit):
             ).decode()
             changed_files = files_raw.splitlines()
 
-            # diff vs parent commit
+            # commit diff
             try:
                 diff = subprocess.check_output(
                     f"git diff {h}^ {h}",
@@ -143,11 +150,15 @@ def backfill(limit):
                     stderr=subprocess.DEVNULL
                 ).decode()
             except subprocess.CalledProcessError:
-                # first commit
                 diff = subprocess.check_output(
                     f"git show {h}",
                     shell=True
                 ).decode()
+
+            # ✂️ truncate huge diffs (speeds ingest)
+            MAX_DIFF = 15000
+            if len(diff) > MAX_DIFF:
+                diff = diff[:MAX_DIFF] + "\n[...diff truncated...]"
 
             payload = {
                 "repo": repo,
@@ -162,17 +173,42 @@ def backfill(limit):
                 "diff": diff,
             }
 
-            # POST with short timeout
-            requests.post(
-                f"{api}/ingest",
-                json=payload,
-                timeout=4
-            )
+            # 🔁 Retry-friendly POST
+            for attempt in range(3):
+                try:
+                    requests.post(
+                        f"{api}/ingest",
+                        json=payload,
+                        timeout=45  # higher timeout for generation
+                    )
+                    return (h, True)
+                except Exception:
+                    time.sleep(2)
+            return (h, False)
 
         except Exception:
-            errors += 1
-            tqdm.write(f"⚠️ Error processing commit {h[:7]}")
+            return (h, False)
 
-    click.echo("\n🎉 Backfill complete!")
+    # --- Execute in parallel ---
+    errors = 0
+    futures = []
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        # launch all tasks first
+        for h in commit_hashes:
+            futures.append(executor.submit(process_commit, h))
+
+        for f in tqdm(as_completed(futures),
+                      total=total,
+                      desc="Ingesting",
+                      unit="commit"):
+            h, ok = f.result()
+            if not ok:
+                errors += 1
+                tqdm.write(f"⚠️ Failed on {h[:7]}")
+
+    click.echo("\n🎉 Backfill finished!")
     if errors:
-        click.echo(f"{errors} commits had errors.")
+        click.echo(f"⚠️ {errors} commits failed.")
+    else:
+        click.echo("💪 No errors detected.")
