@@ -1,19 +1,26 @@
-import os
 import numpy as np
 import httpx
+from codememory.config import load_config
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BASE_URL = "https://api.groq.com/openai/v1"
-EMBED_MODEL = "text-embedding-3-small"
 
 def embed_text(text: str) -> np.ndarray:
+    cfg = load_config()["groq"]
+    api_key = cfg.get("api_key")
+
+    if not api_key:
+        raise RuntimeError(
+            "Groq API key not set.\n"
+            "Edit ~/.codememory/config.toml"
+        )
+
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
 
     payload = {
-        "model": EMBED_MODEL,
+        "model": cfg.get("model_embed"),
         "input": text,
     }
 

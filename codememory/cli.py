@@ -3,7 +3,7 @@ from rich import print
 from codememory.ingest import ingest_repo, ingest_last_commit
 from codememory.ask import ask_question
 from codememory.store import init_db
-from codememory.config import CODEMEM_DIR
+from codememory.config import CODEMEM_DIR, CONFIG_PATH
 
 app = typer.Typer(help="CodeMemory – semantic memory for git repos")
 
@@ -11,8 +11,19 @@ app = typer.Typer(help="CodeMemory – semantic memory for git repos")
 def init():
     """Initialize CodeMemory for this repo"""
     CODEMEM_DIR.mkdir(exist_ok=True)
+
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.write_text(
+            """[groq]
+api_key = ""
+model_chat = "llama3-70b-8192"
+model_embed = "text-embedding-3-small"
+"""
+        )
+
     init_db()
     print("[green]✔ CodeMemory initialized[/green]")
+    print(f"[yellow]Edit your API key in {CONFIG_PATH}[/yellow]")
 
 @app.command()
 def ingest(last: bool = False):
