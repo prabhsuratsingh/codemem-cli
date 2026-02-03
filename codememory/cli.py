@@ -16,12 +16,18 @@ def init():
         CONFIG_PATH.write_text(
             """[groq]
 api_key = ""
-model_chat = "llama3-70b-8192"
-model_embed = "text-embedding-3-small"
+model_chat = "llama-3.3-70b-versatile"
 """
         )
 
     init_db()
+
+    try:
+        from codememory.embed import _get_model
+        _get_model()
+    except Exception:
+        pass
+    
     print("[green]✔ CodeMemory initialized[/green]")
     print(f"[yellow]Edit your API key in {CONFIG_PATH}[/yellow]")
 

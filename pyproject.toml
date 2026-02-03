@@ -1,13 +1,15 @@
 [project]
 name = "codemem-cli"
-version = "0.1.1"
+version = "0.1.8"
 description = "Local semantic memory for git repositories"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "groq>=1.0.0",
     "httpx>=0.28.1",
     "numpy>=2.4.2",
     "rich>=14.3.2",
+    "sentence-transformers>=5.2.2",
     "typer>=0.21.1",
 ]
 
