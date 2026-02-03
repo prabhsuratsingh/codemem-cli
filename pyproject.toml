@@ -13,3 +13,6 @@ dependencies = [
 
 [project.scripts]
 codemem = "codememory.cli:app"
+
+[tool.uv]
+package = true

@@ -1,4 +1,6 @@
 import sqlite3
+import numpy as np
+
 from codememory.config import DB_PATH
 
 def get_conn():
@@ -38,3 +40,10 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def serialize_embedding(vec: np.ndarray) -> bytes:
+    return vec.tobytes()
+
+def deserialize_embedding(blob: bytes) -> np.ndarray:
+    return np.frombuffer(blob, dtype=np.float32)

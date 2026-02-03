@@ -1,9 +1,11 @@
 import hashlib
 from multiprocessing import Pool, cpu_count
+
 from codememory.git_utils import get_commits, get_diff
 from codememory.groq_client import groq_chat
-from codememory.store import get_conn
+from codememory.store import get_conn, serialize_embedding
 from codememory.config import IMPORTANT_KEYWORDS
+from codememory.embed import embed_text
 
 def summarize_commit(commit_hash):
     diff = get_diff(commit_hash)
@@ -37,20 +39,30 @@ def ingest_last_commit():
     _, summary = summarize_commit(commit)
     store_summary(commit, summary)
 
+def should_embed(summary: str) -> bool:
+    text = summary.lower()
+    return any(k in text for k in IMPORTANT_KEYWORDS)
+
 def store_summary(commit_hash, summary):
     summary_id = hashlib.sha256(summary.encode()).hexdigest()
+    embedding_blob = None
+
+    if should_embed(summary):
+        vec = embed_text(summary)
+        embedding_blob = serialize_embedding(vec)
+
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute(
-        "INSERT OR IGNORE INTO summaries VALUES (?, ?, ?)",
-        (summary_id, summary, None)
-    )
+    cur.execute("""
+        INSERT OR IGNORE INTO summaries (id, content, embedding)
+        VALUES (?, ?, ?)
+    """, (summary_id, summary, embedding_blob))
 
-    cur.execute(
-        "INSERT OR IGNORE INTO commits VALUES (?, '', 0, '', ?)",
-        (commit_hash, summary_id)
-    )
+    cur.execute("""
+        INSERT OR IGNORE INTO commits (hash, author, date, message, summary_id)
+        VALUES (?, '', 0, '', ?)
+    """, (commit_hash, summary_id))
 
     conn.commit()
     conn.close()
